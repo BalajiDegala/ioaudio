@@ -1,76 +1,82 @@
 import numpy as np
 import sounddevice as sd
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-
-# Parameters
-sample_rate = 44100  # Samples per second
-duration = 5  # Duration of the sound in seconds
-frequency = 44  # Frequency of the sine wave (A4 note)
-volume = 0.5  # Volume level
-
-# Generate the initial sine wave
-t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
-print(t)
-sine_wave = volume * np.sin(2 * np.pi * frequency * t)
-
-# Set up the figure for plotting
-fig, ax = plt.subplots(figsize=(10, 4))
-line, = ax.plot([], [], lw=2)
-ax.set_xlim(0, 0.1)  # Show only 0.1 seconds of data for clarity
-ax.set_ylim(-1, 1)
-ax.set_title(f"Sine Wave: {frequency} Hz")
-ax.set_xlabel("Time (s)")
-ax.set_ylabel("Amplitude")
-ax.grid()
-
-# Initialize variables
-current_frame = 0
-chunk_size = 1024  # Number of samples per callback
-
-def update_plot(frame):
-    """Update the plot for animation."""
-    global current_frame
-    start = current_frame * chunk_size
-    end = start + chunk_size
-
-    # Handle case where we exceed the wave length
-    if start >= len(sine_wave):
-        return line,
-
-    time_segment = t[start:end]
-    sine_segment = sine_wave[start:end]
-
-    line.set_data(time_segment, sine_segment)
-    return line,
-
-def audio_callback(outdata, frames, time, status):
-    """Callback function for sounddevice to generate audio in real-time."""
-    global current_frame
-    # if status:
-    #     print(status)
-
-    start = current_frame * chunk_size
-    end = start + frames
-
-    # Handle underflow (remaining samples less than requested)
-    if end > len(sine_wave):
-        remaining_samples = len(sine_wave) - start
-        outdata[:remaining_samples] = sine_wave[start:].reshape(-1, 1)
-        outdata[remaining_samples:] = 0  # Fill the rest with silence
-        raise sd.CallbackStop()  # Stop playback after this chunk
-    else:
-        outdata[:] = sine_wave[start:end].reshape(-1, 1)
-
-    current_frame += 1
-
-# Create the animation object
-ani = animation.FuncAnimation(fig, update_plot, frames=range(0, int(sample_rate * duration / chunk_size)), interval=50, blit=True)
-
-# Display the plot and play the sound
-def start_audio_and_visualization():
-    with sd.OutputStream(callback=audio_callback, channels=1, samplerate=sample_rate):
-        plt.show()  # Show the plot and start updating it
+import cv2
 
 
-start_audio_and_visualization()
+class RealTimeMusicPlayerWithBass:
+    def __init__(self, sample_rate=44100, chunk_size=1024, volume=0.5, bass_volume=0.3):
+        self.sample_rate = sample_rate  # Samples per second
+        self.chunk_size = chunk_size  # Number of audio samples per chunk
+        self.volume = volume  # Volume level for melody
+        self.bass_volume = bass_volume  # Volume level for bass
+        self.time = 0  # Keeps track of time for continuous sine wave
+        self.frequency = 440  # Default melody frequency
+        self.bass_frequency = 100  # Default bass frequency
+
+    def generate_sine_wave(self, frequency, frames):
+        """Generate a sine wave for the given frequency and number of frames."""
+        t = np.linspace(self.time, self.time + frames / self.sample_rate, frames, endpoint=False)
+        self.time += frames / self.sample_rate  # Update the time for the next chunk
+        return self.volume * np.sin(2 * np.pi * frequency * t)
+
+    def generate_bass_wave(self, frames):
+        """Generate a sine wave for the bass."""
+        t = np.linspace(self.time, self.time + frames / self.sample_rate, frames, endpoint=False)
+        return self.bass_volume * np.sin(2 * np.pi * self.bass_frequency * t)
+
+    def audio_callback(self, outdata, frames, time, status):
+        """Callback function to send audio data to the output stream."""
+        if status:
+            print(f"Audio status: {status}")
+        melody_wave = self.generate_sine_wave(self.frequency, frames)  # Generate melody sine wave
+        bass_wave = self.generate_bass_wave(frames)  # Generate bass sine wave
+        composite_wave = melody_wave + bass_wave  # Combine melody and bass
+        outdata[:] = composite_wave.reshape(-1, 1)  # Output audio data
+
+        # Update the waveform visualization
+        self.plot_waveform_with_opencv(composite_wave)
+
+    def plot_waveform_with_opencv(self, wave):
+        """Plot the waveform using OpenCV."""
+        canvas = np.ones((300, 800, 3), dtype=np.uint8) * 255  # Create a white canvas
+        x = np.linspace(0, canvas.shape[1], len(wave)).astype(np.int32)
+        y = (canvas.shape[0] / 2 - wave * (canvas.shape[0] / 2)).astype(np.int32)
+        for i in range(len(x) - 1):
+            cv2.line(canvas, (x[i], y[i]), (x[i + 1], y[i + 1]), (0, 0, 255), 1)
+        cv2.imshow("Waveform", canvas)
+        if cv2.waitKey(1) == 27:  # Exit on 'Esc' key
+            raise KeyboardInterrupt
+
+    def play_music(self, melody_freqs, bass_freqs, durations, duration_per_note=0.5):
+        """Play a melody with dynamic bass and real-time visualization."""
+        self.time = 0  # Reset time for clean playback
+
+        with sd.OutputStream(callback=self.audio_callback, channels=1, samplerate=self.sample_rate):
+            for i in range(len(melody_freqs)):
+                self.frequency = melody_freqs[i]  # Set the current melody frequency
+                self.bass_frequency = bass_freqs[i]  # Set the current bass frequency
+                sd.sleep(int(durations[i] * 1000))  # Wait for the duration of the note
+
+        cv2.destroyAllWindows()  # Close the waveform window
+
+
+if __name__ == "__main__":
+    # Create a repeating and varied melody with rhythmic "rhymes"
+    melody_freqs = [
+        262, 294, 330, 349, 392, 440, 494, 523, 440, 349, 330, 294, 262, 220, 349, 330, 220
+    ]  # Repeating melody with a rhythmic rhyme
+    bass_freqs = [
+        65, 73, 82, 87, 98, 110, 123, 131, 110, 87, 82, 73, 65, 55, 87, 82, 55
+    ]  # Complementary bass frequencies
+    durations = [
+        0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1, 0.5, 0.5, 0.5, 0.5, 0.5, 1, 0.5, 1
+    ]  # Rhythmic pattern for each note
+
+    # Create an instance of the RealTimeMusicPlayerWithBass class
+    music_player = RealTimeMusicPlayerWithBass(sample_rate=44100, chunk_size=1024, volume=0.5, bass_volume=0.3)
+
+    # Play the melody with bass and real-time waveform plotting
+    try:
+        music_player.play_music(melody_freqs, bass_freqs, durations, duration_per_note=0.5)
+    except KeyboardInterrupt:
+        print("Playback interrupted.")
